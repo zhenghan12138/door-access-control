@@ -25,7 +25,7 @@ import {
   withSecurityHeaders,
   writeAudit
 } from "./lib.js";
-import { requestGatewayOpenDoor } from "./gateway-client.js";
+import { requestGatewayHealth, requestGatewayOpenDoor } from "./gateway-client.js";
 
 const encoder = new TextEncoder();
 
@@ -556,6 +556,19 @@ function parseUpstreamRequest(rawConfig) {
   return config;
 }
 
+async function handleGatewayHealth(request, env) {
+  const user = await requireActiveUser(env, request);
+  if (!user || user.role !== "admin") return jsonResponse(403, { message: "需要管理员权限" });
+
+  try {
+    return jsonResponse(200, { gateway: await requestGatewayHealth(env) });
+  } catch (error) {
+    return jsonResponse(502, {
+      message: error?.name === "AbortError" ? "网关健康检查超时" : "无法连接门禁网关"
+    });
+  }
+}
+
 async function handleOpenDoor(request, env) {
   const user = await requireActiveUser(env, request);
   if (!user) return jsonResponse(401, { success: false, message: "请先登录" });
@@ -668,6 +681,7 @@ async function handleApi(request, env) {
   if (path.startsWith("/api/admin/users/") && method === "PATCH") {
     return handleUpdateUser(request, env, decodeURIComponent(path.slice("/api/admin/users/".length)));
   }
+  if (path === "/api/admin/gateway" && method === "GET") return handleGatewayHealth(request, env);
   if (path === "/api/open-door" && method === "POST") return handleOpenDoor(request, env);
 
   return jsonResponse(404, { message: "接口不存在" });

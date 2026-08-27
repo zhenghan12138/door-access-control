@@ -68,3 +68,22 @@ export async function requestGatewayOpenDoor(env) {
     clearTimeout(timeout);
   }
 }
+
+export async function requestGatewayHealth(env) {
+  const url = resolveGatewayEndpoint(env);
+  url.pathname = "/health";
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), 10_000);
+
+  try {
+    const response = await fetch(url, { signal: abortController.signal });
+    const text = await response.text();
+    return {
+      status: response.status,
+      contentType: response.headers.get("content-type"),
+      body: text.slice(0, 200)
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
