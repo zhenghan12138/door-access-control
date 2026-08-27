@@ -1,6 +1,6 @@
 {
-  "name": "智能门禁",
-  "short_name": "智能门禁",
+  "name": "你钥匙啊",
+  "short_name": "你钥匙啊",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
