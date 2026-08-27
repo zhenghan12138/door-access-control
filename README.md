@@ -1,30 +1,38 @@
-# 门禁控制页面
+# 智能门禁
 
-一个受密码保护的门禁控制页。前端静态资源和 API 代理部署在 Cloudflare Workers；门锁 token 和请求参数仅保存在 Cloudflare Secrets 中，不会进入 Git 仓库或发送到浏览器。
+部署在 Cloudflare Workers 的门禁控制与用户管理系统。支持：
 
-## 本地运行
+- 用户名和密码登录
+- 注册申请与管理员审核
+- 用户启用、停用和角色管理
+- WebAuthn 通行密钥，兼容 Apple iCloud 钥匙串、面容 ID 和触控 ID
+- D1 用户、会话、凭据和审计日志存储
+- 门锁 API 凭据通过 Cloudflare Secret 注入
 
-需要 Node.js 18 或更高版本。将原始 `commandByHouseHostId` 请求抓包放在项目根目录后运行：
+## 本地开发
+
+需要 Node.js 20 或更高版本。
 
 ```bash
+npm install
+npm run db:migrate:local
 npm start
 ```
 
-打开 <http://127.0.0.1:4173>。本地服务器读取抓包并代理请求，抓包文件已被 `.gitignore` 排除。
+本地服务默认运行在 <http://localhost:8787>。门锁代理需要在 `.dev.vars` 中配置 `UPSTREAM_REQUEST`；该文件已被 `.gitignore` 排除。
 
 ## Cloudflare 部署
 
-首次部署前登录并设置三个 Secret：
+首次部署需创建 D1、应用迁移并配置门锁 Secret：
 
 ```bash
 npx wrangler login
-npx wrangler secret put ACCESS_USERNAME
-npx wrangler secret put ACCESS_PASSWORD
+npm run db:migrate:remote
 npx wrangler secret put UPSTREAM_REQUEST
 npm run deploy
 ```
 
-`UPSTREAM_REQUEST` 是以下结构的 JSON 字符串：
+`UPSTREAM_REQUEST` 使用以下 JSON 结构：
 
 ```json
 {
@@ -40,4 +48,10 @@ npm run deploy
 }
 ```
 
-Worker 对整个站点启用 HTTP Basic Auth，并验证开门请求的来源和自定义请求头。不要将上述 Secret 写入仓库。
+不要将 Secret、原始抓包或生产 Nginx 配置提交到仓库。
+
+## 安全模型
+
+公开注册创建的账号状态为 `pending`，管理员批准前不能登录或操作门锁。会话 Cookie 使用 `HttpOnly`、`Secure` 和 `SameSite=Strict`，所有写请求还会验证同源信息和应用请求头。密码使用 PBKDF2-SHA256 哈希，通行密钥通过 SimpleWebAuthn 校验。
+
+通行密钥与注册时的域名绑定。切换自定义域名时，应先配置 `RP_ORIGIN` 和 `RP_ID`，然后让用户在新域名重新添加通行密钥。

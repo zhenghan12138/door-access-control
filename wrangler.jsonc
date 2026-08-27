@@ -3,6 +3,16 @@
   "name": "door-access-control",
   "main": "worker/index.js",
   "compatibility_date": "2026-08-27",
+  "vars": {
+    "RP_NAME": "智能门禁"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "door-access-control",
+      "database_id": "3a4fd1f1-74e3-423a-9ac5-d4aec9579ccf"
+    }
+  ],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",

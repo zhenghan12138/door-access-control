@@ -4,14 +4,23 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server.mjs",
+    "build": "esbuild src/app.js --bundle --minify --outfile=public/app.js",
+    "start": "npm run build && wrangler dev",
     "test": "node --test",
-    "deploy": "wrangler deploy"
+    "deploy": "npm run build && wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply door-access-control --local",
+    "db:migrate:remote": "wrangler d1 migrations apply door-access-control --remote"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "devDependencies": {
+    "esbuild": "^0.25.9",
     "wrangler": "^4.126.0"
+  },
+  "dependencies": {
+    "@simplewebauthn/browser": "^13.3.0",
+    "@simplewebauthn/server": "^13.3.3",
+    "lucide": "^0.468.0"
   }
 }

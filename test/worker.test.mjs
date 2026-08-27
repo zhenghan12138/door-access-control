@@ -2,92 +2,122 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import worker from "../worker/index.js";
+import {
+  getCookie,
+  hashPassword,
+  isTrustedMutation,
+  sessionCookie,
+  validatePassword,
+  validateUsername,
+  verifyPassword
+} from "../worker/lib.js";
 
-const username = "door-admin";
-const password = "test-password";
-const authorization = `Basic ${btoa(`${username}:${password}`)}`;
-const upstreamRequest = JSON.stringify({
-  url: "https://upstream.example/open",
-  token: "upstream-token",
-  body: { door: "front" }
-});
-
-function createEnv(overrides = {}) {
-  return {
-    ACCESS_USERNAME: username,
-    ACCESS_PASSWORD: password,
-    UPSTREAM_REQUEST: upstreamRequest,
-    ASSETS: {
-      fetch: async () => new Response("asset", { headers: { "content-type": "text/html" } })
+function mockDatabase() {
+  const statement = {
+    bind() {
+      return statement;
     },
-    ...overrides
+    async run() {
+      return { meta: { changes: 0 } };
+    }
+  };
+
+  return {
+    prepare() {
+      return statement;
+    },
+    async batch() {
+      return [];
+    }
   };
 }
 
-test("rejects requests without credentials", async () => {
-  const response = await worker.fetch(new Request("https://door.example/"), createEnv());
+function mockContext() {
+  return {
+    waitUntil(promise) {
+      void promise;
+    }
+  };
+}
 
-  assert.equal(response.status, 401);
-  assert.match(response.headers.get("www-authenticate"), /^Basic /);
+test("hashes and verifies passwords without retaining plaintext", async () => {
+  const password = "a-secure-password";
+  const encoded = await hashPassword(password, 1_000);
+
+  assert.match(encoded, /^pbkdf2_sha256\$1000\$/);
+  assert.equal(encoded.includes(password), false);
+  assert.equal(await verifyPassword(password, encoded), true);
+  assert.equal(await verifyPassword("wrong-password", encoded), false);
 });
 
-test("serves protected static assets with security headers", async () => {
+test("validates account credentials", () => {
+  assert.equal(validateUsername("door-admin"), true);
+  assert.equal(validateUsername("门禁管理员"), true);
+  assert.equal(validateUsername("ab"), false);
+  assert.equal(validateUsername("bad name"), false);
+  assert.equal(validatePassword("1234567890"), true);
+  assert.equal(validatePassword("short"), false);
+});
+
+test("sets and parses strict session cookies", () => {
+  const cookie = sessionCookie("secret-token");
+  const request = new Request("https://door.example/", { headers: { cookie } });
+
+  assert.equal(getCookie(request, "door_session"), "secret-token");
+  assert.match(cookie, /HttpOnly/);
+  assert.match(cookie, /Secure/);
+  assert.match(cookie, /SameSite=Strict/);
+});
+
+test("only trusts same-origin mutations with the application header", () => {
+  const trusted = new Request("https://door.example/api/auth/login", {
+    method: "POST",
+    headers: {
+      origin: "https://door.example",
+      "sec-fetch-site": "same-origin",
+      "x-requested-with": "door-access"
+    }
+  });
+  const crossOrigin = new Request("https://door.example/api/auth/login", {
+    method: "POST",
+    headers: {
+      origin: "https://attacker.example",
+      "x-requested-with": "door-access"
+    }
+  });
+
+  assert.equal(isTrustedMutation(trusted), true);
+  assert.equal(isTrustedMutation(crossOrigin), false);
+});
+
+test("serves the login application publicly with security headers", async () => {
   const response = await worker.fetch(
-    new Request("https://door.example/", { headers: { authorization } }),
-    createEnv()
+    new Request("https://door.example/"),
+    {
+      DB: mockDatabase(),
+      ASSETS: { fetch: async () => new Response("login application") }
+    },
+    mockContext()
   );
 
   assert.equal(response.status, 200);
-  assert.equal(await response.text(), "asset");
+  assert.equal(await response.text(), "login application");
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.match(response.headers.get("content-security-policy"), /frame-ancestors 'none'/);
 });
 
-test("rejects cross-origin door requests", async () => {
+test("rejects cross-origin API mutations before handling account data", async () => {
   const response = await worker.fetch(
-    new Request("https://door.example/api/open-door", {
+    new Request("https://door.example/api/auth/register", {
       method: "POST",
       headers: {
-        authorization,
         origin: "https://attacker.example",
-        "x-door-action": "open"
+        "x-requested-with": "door-access"
       }
     }),
-    createEnv()
+    { DB: mockDatabase() },
+    mockContext()
   );
 
   assert.equal(response.status, 403);
 });
-
-test("forwards a valid door request without exposing credentials", async (context) => {
-  const originalFetch = globalThis.fetch;
-
-  context.after(() => {
-    globalThis.fetch = originalFetch;
-  });
-
-  globalThis.fetch = async (url, options) => {
-    assert.equal(url.searchParams.get("token"), "upstream-token");
-    assert.equal(options.headers.token, "upstream-token");
-    assert.deepEqual(JSON.parse(options.body), { door: "front" });
-    return new Response(JSON.stringify({ status: "1", message: "ok" }));
-  };
-
-  const response = await worker.fetch(
-    new Request("https://door.example/api/open-door", {
-      method: "POST",
-      headers: {
-        authorization,
-        origin: "https://door.example",
-        "sec-fetch-site": "same-origin",
-        "x-door-action": "open"
-      }
-    }),
-    createEnv()
-  );
-  const body = await response.json();
-
-  assert.equal(response.status, 200);
-  assert.equal(body.success, true);
-  assert.equal(JSON.stringify(body).includes("upstream-token"), false);
-});
-
