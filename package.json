@@ -6,6 +6,7 @@
   "scripts": {
     "build": "esbuild src/app.js --bundle --minify --outfile=public/app.js",
     "start": "npm run build && wrangler dev",
+    "gateway:start": "node gateway/server.mjs",
     "test": "node --test",
     "deploy": "npm run build && wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply door-access-control --local",
@@ -21,7 +22,6 @@
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.3",
-    "lucide": "^0.468.0",
-    "socks": "^2.8.7"
+    "lucide": "^0.468.0"
   }
 }

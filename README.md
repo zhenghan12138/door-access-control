@@ -6,7 +6,7 @@
 - 注册申请与管理员审核
 - 用户启用、停用和角色管理
 - 登录用户自助修改密码，并注销其他设备会话
-- 管理员配置和测试 SOCKS5 出口，开门请求可按配置走代理
+- 可选的独立 Node 网关，通过 HMAC 签名接收开门命令
 - WebAuthn 通行密钥，兼容 Apple iCloud 钥匙串、面容 ID 和触控 ID
 - D1 用户、会话、凭据和审计日志存储
 - 门锁 API 凭据通过 Cloudflare Secret 注入
@@ -52,13 +52,43 @@ npm run deploy
 
 不要将 Secret、原始抓包或生产 Nginx 配置提交到仓库。
 
-代理密码使用 AES-256-GCM 加密后存入 D1，密钥通过 `PROXY_CONFIG_KEY` Secret 注入：
+## Node 网关
+
+另一台服务器可运行独立网关，由网关直接连接门锁。网关只监听本机 `127.0.0.1:8788`，使用 Nginx/Caddy 提供 HTTPS。
+
+在网关服务器创建 `.env.gateway`：
 
 ```bash
-openssl rand -base64 32 | npx wrangler secret put PROXY_CONFIG_KEY
+HOST=127.0.0.1
+PORT=8788
+GATEWAY_SHARED_SECRET=至少32位随机字符串
+UPSTREAM_REQUEST_BASE64=完整上游请求JSON的Base64编码
 ```
 
-代理服务器必须具有 Cloudflare 可访问的公网主机和端口。管理员可在“代理设置”中保存配置；测试操作会通过代理向门锁上游发送不含 token 的 `HEAD` 请求，并将出口 IP 查询作为辅助信息，不会触发开门。
+建议使用 `openssl rand -hex 32` 生成共享密钥。将现有 `UPSTREAM_REQUEST` JSON 编码为单行 Base64 后写入网关环境文件，避免 token、User-Agent 和空格被 systemd 错误解析：
+
+```bash
+printf '%s' "$UPSTREAM_REQUEST" | base64 | tr -d '\n'
+```
+
+启动并检查：
+
+```bash
+set -a
+source .env.gateway
+set +a
+npm run gateway:start
+curl https://gateway.example.com/health
+```
+
+仓库提供 [systemd](gateway/door-gateway.service.example) 和 [Nginx](gateway/nginx.conf.example) 示例。确认公网 HTTPS 网关可用后，在 Cloudflare Worker 设置相同的共享密钥和网关地址：
+
+```bash
+printf '%s' '至少32位随机字符串' | npx wrangler secret put GATEWAY_SHARED_SECRET
+printf '%s' 'https://gateway.example.com' | npx wrangler secret put GATEWAY_URL
+```
+
+配置两个 Secret 后，点击开门会自动切换到网关。命令包含 60 秒有效期、随机 nonce 和 HMAC-SHA256 签名；网关拒绝过期、篡改和重复请求。未配置网关时 Worker 保留原有直连逻辑。
 
 ## 安全模型
 

@@ -1,5 +1,6 @@
 .DS_Store
 .dev.vars
+.env.gateway
 .wrangler/
 node_modules/
 
@@ -7,4 +8,3 @@ node_modules/
 *Request -*
 *Response -*
 nginx/open-door.zhshd.one.conf
-

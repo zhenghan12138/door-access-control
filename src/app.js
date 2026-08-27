@@ -10,9 +10,6 @@ import {
   LockKeyhole,
   LogIn,
   LogOut,
-  Network,
-  PlugZap,
-  Save,
   ShieldCheck,
   Trash2,
   UserCheck,
@@ -32,9 +29,6 @@ const ICONS = {
   LockKeyhole,
   LogIn,
   LogOut,
-  Network,
-  PlugZap,
-  Save,
   ShieldCheck,
   Trash2,
   UserCheck,
@@ -49,8 +43,7 @@ const state = {
   view: "door",
   authMode: "login",
   passkeys: [],
-  users: [],
-  proxy: null
+  users: []
 };
 
 function icon(name, className = "") {
@@ -196,7 +189,7 @@ function navButton(view, iconName, label, extra = "") {
 function renderShell() {
   const adminNav =
     state.user.role === "admin"
-      ? `${navButton("users", "UsersRound", "用户管理")}${navButton("proxy", "Network", "代理设置")}`
+      ? navButton("users", "UsersRound", "用户管理")
       : "";
   app.innerHTML = `
     <div class="app-shell">
@@ -357,58 +350,6 @@ function renderUsers() {
     </section>`;
 }
 
-function renderProxy() {
-  const proxy = state.proxy ?? {
-    enabled: false,
-    host: "",
-    port: 1080,
-    username: "",
-    hasPassword: false,
-    updatedAt: null
-  };
-  document.querySelector("#view-container").innerHTML = `
-    <section class="view">
-      <div class="view-header split-header">
-        <div><span class="eyebrow">网络出口</span><h1>SOCKS5 代理</h1><p>配置开门请求使用的加密代理通道。</p></div>
-        <span class="status ${proxy.enabled ? "status-active" : "status-disabled"}">${proxy.enabled ? "已启用" : "未启用"}</span>
-      </div>
-      <div class="content-panel proxy-panel">
-        <div class="section-title"><h2>连接配置</h2><span>${proxy.updatedAt ? `更新于 ${formatDate(proxy.updatedAt)}` : "尚未保存"}</span></div>
-        <form class="proxy-form" id="proxy-form">
-          <label class="toggle-row">
-            <span><strong>启用代理</strong><small>启用后，开门请求通过此 SOCKS5 服务器发送。</small></span>
-            <input name="enabled" type="checkbox" ${proxy.enabled ? "checked" : ""} />
-          </label>
-          <div class="proxy-grid">
-            <label class="field proxy-host-field">
-              <span>服务器主机</span>
-              <input name="host" value="${escapeHtml(proxy.host)}" autocomplete="off" required placeholder="例如 203.0.113.10" />
-            </label>
-            <label class="field">
-              <span>端口</span>
-              <input name="port" type="number" value="${proxy.port}" min="1" max="65535" required />
-            </label>
-            <label class="field">
-              <span>用户名</span>
-              <input name="username" value="${escapeHtml(proxy.username)}" autocomplete="off" maxlength="255" placeholder="可选" />
-            </label>
-            <label class="field">
-              <span>密码</span>
-              <input name="password" type="password" autocomplete="new-password" maxlength="255" placeholder="${proxy.hasPassword ? "留空以保留当前密码" : "可选"}" />
-            </label>
-          </div>
-          <div class="proxy-result" id="proxy-result" aria-live="polite">
-            ${icon("Network")}<span>保存前可先测试代理连通性，不会触发门锁。</span>
-          </div>
-          <div class="proxy-actions">
-            <button class="button button-secondary" id="test-proxy" type="button">${icon("PlugZap")}<span>测试代理</span></button>
-            <button class="button button-primary" type="submit">${icon("Save")}<span>保存配置</span></button>
-          </div>
-        </form>
-      </div>
-    </section>`;
-}
-
 async function renderCurrentView() {
   if (state.view === "passkeys") {
     renderPasskeys();
@@ -416,9 +357,6 @@ async function renderCurrentView() {
   } else if (state.view === "users" && state.user.role === "admin") {
     renderUsers();
     await loadUsers();
-  } else if (state.view === "proxy" && state.user.role === "admin") {
-    renderProxy();
-    await loadProxy();
   } else {
     state.view = "door";
     renderDoor();
@@ -440,66 +378,6 @@ async function loadUsers() {
     if (state.view === "users") renderUsers();
   } catch (error) {
     showToast(error.message, "error");
-  }
-}
-
-async function loadProxy() {
-  try {
-    state.proxy = (await api("/api/admin/proxy")).proxy;
-    if (state.view === "proxy") renderProxy();
-  } catch (error) {
-    showToast(error.message, "error");
-  }
-}
-
-function proxyFormValues(form) {
-  const values = Object.fromEntries(new FormData(form));
-  return {
-    enabled: form.elements.enabled.checked,
-    host: values.host,
-    port: Number.parseInt(values.port, 10),
-    username: values.username,
-    password: values.password
-  };
-}
-
-async function saveProxy(form) {
-  const submit = form.querySelector('button[type="submit"]');
-  setButtonLoading(submit, true, "正在保存");
-  try {
-    const result = await api("/api/admin/proxy", {
-      method: "PUT",
-      body: JSON.stringify(proxyFormValues(form))
-    });
-    showToast(result.message, "success");
-    await loadProxy();
-  } catch (error) {
-    showToast(error.message, "error");
-  } finally {
-    setButtonLoading(submit, false);
-  }
-}
-
-async function testProxy(button) {
-  const form = document.querySelector("#proxy-form");
-  const resultBox = document.querySelector("#proxy-result");
-  setButtonLoading(button, true, "正在测试");
-  resultBox.className = "proxy-result is-testing";
-  resultBox.innerHTML = `${icon("LoaderCircle", "spin")}<span>正在建立 SOCKS5 与 TLS 连接</span>`;
-
-  try {
-    const result = await api("/api/admin/proxy/test", {
-      method: "POST",
-      body: JSON.stringify(proxyFormValues(form))
-    });
-    resultBox.className = "proxy-result is-success";
-    const exitIp = result.exitIp ? ` · 出口 IP ${escapeHtml(result.exitIp)}` : "";
-    resultBox.innerHTML = `${icon("Check")}<span>门锁链路正常 · HTTP ${result.upstreamStatus}${exitIp} · ${result.latencyMs} ms</span>`;
-  } catch (error) {
-    resultBox.className = "proxy-result is-error";
-    resultBox.innerHTML = `${icon("Network")}<span>${escapeHtml(error.message)}</span>`;
-  } finally {
-    setButtonLoading(button, false);
   }
 }
 
@@ -687,7 +565,6 @@ app.addEventListener("click", async (event) => {
 
   if (event.target.closest("#passkey-login")) await loginWithPasskey(event.target.closest("button"));
   if (event.target.closest("#add-passkey")) await addPasskey(event.target.closest("button"));
-  if (event.target.closest("#test-proxy")) await testProxy(event.target.closest("button"));
   if (event.target.closest("#open-door")) await openDoor();
   if (event.target.closest("#logout, #mobile-logout")) await logout();
 
@@ -740,11 +617,6 @@ app.addEventListener("change", async (event) => {
 });
 
 app.addEventListener("submit", async (event) => {
-  if (event.target.matches("#proxy-form")) {
-    event.preventDefault();
-    await saveProxy(event.target);
-    return;
-  }
   if (event.target.matches("#change-password-form")) {
     event.preventDefault();
     await changePassword(event.target);

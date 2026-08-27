@@ -1,0 +1,21 @@
+[Unit]
+Description=Door access Node gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/door-access-control
+EnvironmentFile=/opt/door-access-control/.env.gateway
+ExecStart=/usr/bin/node gateway/server.mjs
+Restart=on-failure
+RestartSec=3
+User=door-gateway
+Group=door-gateway
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

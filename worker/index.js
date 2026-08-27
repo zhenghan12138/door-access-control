@@ -25,11 +25,7 @@ import {
   withSecurityHeaders,
   writeAudit
 } from "./lib.js";
-import {
-  encryptProxyPassword,
-  loadProxySettings,
-  validateProxyInput
-} from "./proxy-config.js";
+import { requestGatewayOpenDoor } from "./gateway-client.js";
 
 const encoder = new TextEncoder();
 
@@ -554,155 +550,6 @@ async function handleUpdateUser(request, env, targetUserId) {
   return jsonResponse(200, { success: true });
 }
 
-async function handleGetProxySettings(request, env) {
-  const user = await requireActiveUser(env, request);
-  if (!user || user.role !== "admin") return jsonResponse(403, { message: "需要管理员权限" });
-
-  const row = await env.DB.prepare(
-    "SELECT enabled, host, port, username, password_encrypted, updated_at FROM proxy_settings WHERE id = 1"
-  ).first();
-
-  return jsonResponse(200, {
-    proxy: row
-      ? {
-          enabled: Boolean(row.enabled),
-          host: row.host,
-          port: row.port,
-          username: row.username ?? "",
-          hasPassword: Boolean(row.password_encrypted),
-          updatedAt: row.updated_at
-        }
-      : {
-          enabled: false,
-          host: "",
-          port: 1080,
-          username: "",
-          hasPassword: false,
-          updatedAt: null
-        }
-  });
-}
-
-async function handleSaveProxySettings(request, env) {
-  const user = await requireActiveUser(env, request);
-  if (!user || user.role !== "admin") return jsonResponse(403, { message: "需要管理员权限" });
-
-  const input = await readJson(request);
-  const existing = await env.DB.prepare(
-    "SELECT username, password_encrypted FROM proxy_settings WHERE id = 1"
-  ).first();
-  const proxy = validateProxyInput(input, {
-    passwordRequired:
-      Boolean(input?.username) &&
-      !input?.password &&
-      (!existing?.password_encrypted || input.username !== existing.username)
-  });
-  const passwordEncrypted = proxy.username
-    ? proxy.password
-      ? await encryptProxyPassword(proxy.password, env.PROXY_CONFIG_KEY)
-      : existing?.password_encrypted
-    : null;
-
-  await env.DB.prepare(
-    `INSERT INTO proxy_settings
-       (id, enabled, host, port, username, password_encrypted, updated_at, updated_by)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       enabled = excluded.enabled,
-       host = excluded.host,
-       port = excluded.port,
-       username = excluded.username,
-       password_encrypted = excluded.password_encrypted,
-       updated_at = excluded.updated_at,
-       updated_by = excluded.updated_by`
-  )
-    .bind(
-      proxy.enabled ? 1 : 0,
-      proxy.host,
-      proxy.port,
-      proxy.username || null,
-      passwordEncrypted,
-      now(),
-      user.id
-    )
-    .run();
-  await writeAudit(env, request, "admin.proxy_update", user.id, user.id);
-
-  return jsonResponse(200, { success: true, message: "代理配置已保存" });
-}
-
-async function resolveProxyForTest(request, env) {
-  const input = await readJson(request);
-  const saved = await loadProxySettings(env);
-  const proxy = validateProxyInput(input, {
-    passwordRequired:
-      Boolean(input?.username) &&
-      !input?.password &&
-      (!saved?.password || input.username !== saved.username)
-  });
-  if (!proxy.password && saved?.password && proxy.username === saved.username) {
-    proxy.password = saved.password;
-  }
-  return proxy;
-}
-
-async function requestThroughSocks(proxy, url, options) {
-  const { socksRequest } = await import("./socks-request.js");
-  return socksRequest(proxy, url, options);
-}
-
-function sanitizedProxyError(error, proxy) {
-  let message = String(error?.message ?? "未知错误");
-  for (const secret of [proxy?.username, proxy?.password]) {
-    if (secret) message = message.replaceAll(secret, "[REDACTED]");
-  }
-  return message.slice(0, 180);
-}
-
-async function handleTestProxy(request, env) {
-  const user = await requireActiveUser(env, request);
-  if (!user || user.role !== "admin") return jsonResponse(403, { message: "需要管理员权限" });
-
-  const proxy = await resolveProxyForTest(request, env);
-  const startedAt = Date.now();
-
-  try {
-    const upstreamRequest = parseUpstreamRequest(env.UPSTREAM_REQUEST);
-    const upstreamUrl = new URL(upstreamRequest.url);
-    upstreamUrl.search = "";
-    const upstream = await requestThroughSocks(proxy, upstreamUrl, {
-      method: "HEAD",
-      timeout: 12_000
-    });
-    let exitIp = null;
-
-    try {
-      const ipResponse = await requestThroughSocks(proxy, "https://api.ip.sb/ip", {
-        timeout: 8_000
-      });
-      if (ipResponse.ok) exitIp = (await ipResponse.text()).trim() || null;
-    } catch {
-      // The door upstream check is authoritative; the IP display is optional.
-    }
-
-    await writeAudit(env, request, "admin.proxy_test", user.id, user.id);
-    return jsonResponse(200, {
-      success: true,
-      exitIp,
-      upstreamStatus: upstream.status,
-      latencyMs: Date.now() - startedAt,
-      message: "代理可连接门锁服务"
-    });
-  } catch (error) {
-    const message = sanitizedProxyError(error, proxy);
-    console.error(`SOCKS5 test failed: ${error?.name ?? "Error"}: ${message}`);
-    return jsonResponse(502, {
-      success: false,
-      message: `代理连接失败：${message}`
-    });
-  }
-}
-
 function parseUpstreamRequest(rawConfig) {
   const config = JSON.parse(rawConfig ?? "");
   if (!config.url || !config.token || !config.body) throw new Error("UPSTREAM_REQUEST is incomplete");
@@ -714,6 +561,25 @@ async function handleOpenDoor(request, env) {
   if (!user) return jsonResponse(401, { success: false, message: "请先登录" });
   if (request.headers.get("x-door-action") !== "open") {
     return jsonResponse(403, { success: false, message: "请求来源无效" });
+  }
+
+  if (env.GATEWAY_URL || env.GATEWAY_SHARED_SECRET) {
+    try {
+      const gateway = await requestGatewayOpenDoor(env);
+      await writeAudit(env, request, "door.open.gateway", user.id, user.id);
+      return jsonResponse(gateway.ok ? 200 : 502, {
+        success: Boolean(gateway.data?.success),
+        status: gateway.data?.status,
+        result: gateway.data?.result,
+        code: gateway.data?.code,
+        message: gateway.data?.message ?? "网关开门请求失败"
+      });
+    } catch (error) {
+      return jsonResponse(502, {
+        success: false,
+        message: error?.name === "AbortError" ? "门禁网关响应超时" : "无法连接门禁网关"
+      });
+    }
   }
 
   let upstreamRequest;
@@ -740,13 +606,7 @@ async function handleOpenDoor(request, env) {
       body: JSON.stringify(upstreamRequest.body),
       signal: abortController.signal
     };
-    const proxy = await loadProxySettings(env);
-    const upstream = proxy?.enabled
-      ? await requestThroughSocks(proxy, upstreamUrl, {
-          ...requestOptions,
-          timeout: 15_000
-        })
-      : await fetch(upstreamUrl, requestOptions);
+    const upstream = await fetch(upstreamUrl, requestOptions);
     const text = await upstream.text();
     let data;
     try {
@@ -808,9 +668,6 @@ async function handleApi(request, env) {
   if (path.startsWith("/api/admin/users/") && method === "PATCH") {
     return handleUpdateUser(request, env, decodeURIComponent(path.slice("/api/admin/users/".length)));
   }
-  if (path === "/api/admin/proxy" && method === "GET") return handleGetProxySettings(request, env);
-  if (path === "/api/admin/proxy" && method === "PUT") return handleSaveProxySettings(request, env);
-  if (path === "/api/admin/proxy/test" && method === "POST") return handleTestProxy(request, env);
   if (path === "/api/open-door" && method === "POST") return handleOpenDoor(request, env);
 
   return jsonResponse(404, { message: "接口不存在" });
