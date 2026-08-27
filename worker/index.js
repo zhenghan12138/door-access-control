@@ -651,6 +651,14 @@ async function requestThroughSocks(proxy, url, options) {
   return socksRequest(proxy, url, options);
 }
 
+function sanitizedProxyError(error, proxy) {
+  let message = String(error?.message ?? "未知错误");
+  for (const secret of [proxy?.username, proxy?.password]) {
+    if (secret) message = message.replaceAll(secret, "[REDACTED]");
+  }
+  return message.slice(0, 180);
+}
+
 async function handleTestProxy(request, env) {
   const user = await requireActiveUser(env, request);
   if (!user || user.role !== "admin") return jsonResponse(403, { message: "需要管理员权限" });
@@ -672,10 +680,11 @@ async function handleTestProxy(request, env) {
       message: "代理连接成功"
     });
   } catch (error) {
-    console.error("SOCKS5 test failed", error);
+    const message = sanitizedProxyError(error, proxy);
+    console.error(`SOCKS5 test failed: ${error?.name ?? "Error"}: ${message}`);
     return jsonResponse(502, {
       success: false,
-      message: `代理连接失败：${String(error?.message ?? "未知错误").slice(0, 180)}`
+      message: `代理连接失败：${message}`
     });
   }
 }
