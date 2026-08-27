@@ -58,7 +58,7 @@ npm run deploy
 openssl rand -base64 32 | npx wrangler secret put PROXY_CONFIG_KEY
 ```
 
-代理服务器必须具有 Cloudflare 可访问的公网主机和端口。管理员可在“代理设置”中保存配置，并通过出口 IP 查询执行无副作用的连通性测试。
+代理服务器必须具有 Cloudflare 可访问的公网主机和端口。管理员可在“代理设置”中保存配置；测试操作会通过代理向门锁上游发送不含 token 的 `HEAD` 请求，并将出口 IP 查询作为辅助信息，不会触发开门。
 
 ## 安全模型
 

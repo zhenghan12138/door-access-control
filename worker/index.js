@@ -667,17 +667,31 @@ async function handleTestProxy(request, env) {
   const startedAt = Date.now();
 
   try {
-    const response = await requestThroughSocks(proxy, "https://api.ipify.org?format=json", {
+    const upstreamRequest = parseUpstreamRequest(env.UPSTREAM_REQUEST);
+    const upstreamUrl = new URL(upstreamRequest.url);
+    upstreamUrl.search = "";
+    const upstream = await requestThroughSocks(proxy, upstreamUrl, {
+      method: "HEAD",
       timeout: 12_000
     });
-    const data = await response.json();
-    if (!response.ok || !data?.ip) throw new Error("出口 IP 服务返回异常");
+    let exitIp = null;
+
+    try {
+      const ipResponse = await requestThroughSocks(proxy, "https://api.ip.sb/ip", {
+        timeout: 8_000
+      });
+      if (ipResponse.ok) exitIp = (await ipResponse.text()).trim() || null;
+    } catch {
+      // The door upstream check is authoritative; the IP display is optional.
+    }
+
     await writeAudit(env, request, "admin.proxy_test", user.id, user.id);
     return jsonResponse(200, {
       success: true,
-      exitIp: data.ip,
+      exitIp,
+      upstreamStatus: upstream.status,
       latencyMs: Date.now() - startedAt,
-      message: "代理连接成功"
+      message: "代理可连接门锁服务"
     });
   } catch (error) {
     const message = sanitizedProxyError(error, proxy);

@@ -493,7 +493,8 @@ async function testProxy(button) {
       body: JSON.stringify(proxyFormValues(form))
     });
     resultBox.className = "proxy-result is-success";
-    resultBox.innerHTML = `${icon("Check")}<span>连接成功 · 出口 IP ${escapeHtml(result.exitIp)} · ${result.latencyMs} ms</span>`;
+    const exitIp = result.exitIp ? ` · 出口 IP ${escapeHtml(result.exitIp)}` : "";
+    resultBox.innerHTML = `${icon("Check")}<span>门锁链路正常 · HTTP ${result.upstreamStatus}${exitIp} · ${result.latencyMs} ms</span>`;
   } catch (error) {
     resultBox.className = "proxy-result is-error";
     resultBox.innerHTML = `${icon("Network")}<span>${escapeHtml(error.message)}</span>`;
