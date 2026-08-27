@@ -29,18 +29,27 @@ export async function createGatewayHeaders(secret, body, timestamp = String(Date
   };
 }
 
-export async function requestGatewayOpenDoor(env) {
+export function resolveGatewayEndpoint(env) {
   if (!env.GATEWAY_URL || !env.GATEWAY_SHARED_SECRET) {
     throw new Error("门禁网关尚未完整配置");
   }
 
   const url = new URL(env.GATEWAY_URL);
   const localDevelopment = ["localhost", "127.0.0.1"].includes(url.hostname);
-  if (url.protocol !== "https:" && !(localDevelopment && url.protocol === "http:")) {
-    throw new Error("门禁网关必须使用 HTTPS");
+  const insecureHttpAllowed = env.ALLOW_INSECURE_GATEWAY === "true";
+  if (
+    url.protocol !== "https:" &&
+    !(url.protocol === "http:" && (localDevelopment || insecureHttpAllowed))
+  ) {
+    throw new Error("公网 HTTP 网关需要显式启用 ALLOW_INSECURE_GATEWAY");
   }
   url.pathname = "/v1/open-door";
   url.search = "";
+  return url;
+}
+
+export async function requestGatewayOpenDoor(env) {
+  const url = resolveGatewayEndpoint(env);
 
   const body = JSON.stringify({ action: "open-door" });
   const abortController = new AbortController();

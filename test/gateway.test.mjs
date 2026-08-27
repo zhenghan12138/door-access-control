@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { ReplayCache, createGatewaySignature, verifyGatewayRequest } from "../gateway/auth.mjs";
 import { createGatewayServer } from "../gateway/server.mjs";
-import { createGatewayHeaders } from "../worker/gateway-client.js";
+import { createGatewayHeaders, resolveGatewayEndpoint } from "../worker/gateway-client.js";
 
 const sharedSecret = "test-shared-secret-with-more-than-32-characters";
 
@@ -44,6 +44,19 @@ test("rejects expired and invalid gateway signatures", () => {
   assert.equal(verifyGatewayRequest(headers, body, sharedSecret, new ReplayCache()).valid, false);
   headers.set("x-gateway-timestamp", String(Date.now()));
   assert.equal(verifyGatewayRequest(headers, body, sharedSecret, new ReplayCache()).valid, false);
+});
+
+test("requires explicit opt-in for a public HTTP gateway", () => {
+  const base = {
+    GATEWAY_URL: "http://203.0.113.10:8788",
+    GATEWAY_SHARED_SECRET: sharedSecret
+  };
+
+  assert.throws(() => resolveGatewayEndpoint(base), /显式启用/);
+  assert.equal(
+    resolveGatewayEndpoint({ ...base, ALLOW_INSECURE_GATEWAY: "true" }).toString(),
+    "http://203.0.113.10:8788/v1/open-door"
+  );
 });
 
 test("gateway verifies a signed command and forwards the door request", async (context) => {

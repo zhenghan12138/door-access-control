@@ -54,12 +54,12 @@ npm run deploy
 
 ## Node 网关
 
-另一台服务器可运行独立网关，由网关直接连接门锁。网关只监听本机 `127.0.0.1:8788`，使用 Nginx/Caddy 提供 HTTPS。
+另一台服务器可运行独立网关，由网关直接连接门锁。需要直接使用公网 HTTP IP 时，让网关监听 `0.0.0.0:8788`，并在服务器安全组开放该端口。
 
 在网关服务器创建 `.env.gateway`：
 
 ```bash
-HOST=127.0.0.1
+HOST=0.0.0.0
 PORT=8788
 GATEWAY_SHARED_SECRET=至少32位随机字符串
 UPSTREAM_REQUEST_BASE64=完整上游请求JSON的Base64编码
@@ -78,17 +78,19 @@ set -a
 source .env.gateway
 set +a
 npm run gateway:start
-curl https://gateway.example.com/health
+curl http://服务器IP:8788/health
 ```
 
-仓库提供 [systemd](gateway/door-gateway.service.example) 和 [Nginx](gateway/nginx.conf.example) 示例。确认公网 HTTPS 网关可用后，在 Cloudflare Worker 设置相同的共享密钥和网关地址：
+仓库提供 [systemd](gateway/door-gateway.service.example) 示例。确认公网 HTTP 网关可用后，在 Cloudflare Worker 设置相同的共享密钥和网关地址：
 
 ```bash
 printf '%s' '至少32位随机字符串' | npx wrangler secret put GATEWAY_SHARED_SECRET
-printf '%s' 'https://gateway.example.com' | npx wrangler secret put GATEWAY_URL
+printf '%s' 'http://服务器IP:8788' | npx wrangler secret put GATEWAY_URL
 ```
 
 配置两个 Secret 后，点击开门会自动切换到网关。命令包含 60 秒有效期、随机 nonce 和 HMAC-SHA256 签名；网关拒绝过期、篡改和重复请求。未配置网关时 Worker 保留原有直连逻辑。
+
+`wrangler.jsonc` 中的 `ALLOW_INSECURE_GATEWAY=true` 是公网 HTTP 的显式授权。HTTP 不会暴露门锁 token 或共享密钥，但网络观察者仍可看到命令、阻断请求或抢先转发同一个已签名命令。网关的 nonce 防重放只能保证同一命令最多执行一次。
 
 ## 安全模型
 
