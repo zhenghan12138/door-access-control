@@ -5,6 +5,8 @@
 - 用户名和密码登录
 - 注册申请与管理员审核
 - 用户启用、停用和角色管理
+- 登录用户自助修改密码，并注销其他设备会话
+- 管理员配置和测试 SOCKS5 出口，开门请求可按配置走代理
 - WebAuthn 通行密钥，兼容 Apple iCloud 钥匙串、面容 ID 和触控 ID
 - D1 用户、会话、凭据和审计日志存储
 - 门锁 API 凭据通过 Cloudflare Secret 注入
@@ -49,6 +51,14 @@ npm run deploy
 ```
 
 不要将 Secret、原始抓包或生产 Nginx 配置提交到仓库。
+
+代理密码使用 AES-256-GCM 加密后存入 D1，密钥通过 `PROXY_CONFIG_KEY` Secret 注入：
+
+```bash
+openssl rand -base64 32 | npx wrangler secret put PROXY_CONFIG_KEY
+```
+
+代理服务器必须具有 Cloudflare 可访问的公网主机和端口。管理员可在“代理设置”中保存配置，并通过出口 IP 查询执行无副作用的连通性测试。
 
 ## 安全模型
 

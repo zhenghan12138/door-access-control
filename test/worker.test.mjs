@@ -7,10 +7,16 @@ import {
   hashPassword,
   isTrustedMutation,
   sessionCookie,
+  toBase64Url,
   validatePassword,
   validateUsername,
   verifyPassword
 } from "../worker/lib.js";
+import {
+  decryptProxyPassword,
+  encryptProxyPassword,
+  validateProxyInput
+} from "../worker/proxy-config.js";
 
 function mockDatabase() {
   const statement = {
@@ -57,6 +63,32 @@ test("validates account credentials", () => {
   assert.equal(validateUsername("bad name"), false);
   assert.equal(validatePassword("1234567890"), true);
   assert.equal(validatePassword("short"), false);
+});
+
+test("validates proxy settings and encrypts proxy passwords", async () => {
+  const proxy = validateProxyInput({
+    enabled: true,
+    host: "proxy.example.com",
+    port: 1080,
+    username: "door-user",
+    password: "proxy-password"
+  });
+  const secret = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
+  const encrypted = await encryptProxyPassword(proxy.password, secret);
+
+  assert.equal(proxy.enabled, true);
+  assert.equal(encrypted.includes(proxy.password), false);
+  assert.equal(await decryptProxyPassword(encrypted, secret), proxy.password);
+  assert.throws(() => validateProxyInput({ host: "bad host", port: 1080 }), /主机地址/);
+  assert.throws(() => validateProxyInput({ host: "proxy.example.com", port: 70000 }), /端口/);
+  assert.throws(
+    () =>
+      validateProxyInput(
+        { host: "proxy.example.com", port: 1080, username: "door-user" },
+        { passwordRequired: true }
+      ),
+    /代理密码/
+  );
 });
 
 test("sets and parses strict session cookies", () => {

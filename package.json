@@ -21,6 +21,7 @@
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.3",
-    "lucide": "^0.468.0"
+    "lucide": "^0.468.0",
+    "socks": "^2.8.7"
   }
 }
