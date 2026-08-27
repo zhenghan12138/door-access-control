@@ -61,7 +61,7 @@ npm run deploy
 ```bash
 HOST=127.0.0.1
 PORT=8788
-CONTROL_PLANE_URL=https://door.zhshd.one
+CONTROL_PLANE_URL=https://door.example.com
 GATEWAY_SHARED_SECRET=至少32位随机字符串
 UPSTREAM_REQUEST_BASE64=完整上游请求JSON的Base64编码
 ```
@@ -88,7 +88,7 @@ curl http://127.0.0.1:8788/health
 printf '%s' '至少32位随机字符串' | npx wrangler secret put GATEWAY_SHARED_SECRET
 ```
 
-设置 Secret 后，点击开门会在 D1 创建一次性命令；网关领取、执行并回报结果。网站最多等待 20 秒并显示门锁返回内容。网关与网站之间始终使用现有 `https://door.zhshd.one`，服务器无需开放 80 或 8788。未设置共享密钥时 Worker 保留原有直连逻辑。
+设置 Secret 后，点击开门会在 D1 创建一次性命令；网关领取、执行并回报结果。网站最多等待 20 秒并显示门锁返回内容。网关与网站之间始终使用现有 `https://door.example.com`，服务器无需开放 80 或 8788。未设置共享密钥时 Worker 保留原有直连逻辑。
 
 ## 安全模型
 
