@@ -9,6 +9,7 @@ import {
   burnPasswordCheck,
   clearSessionCookie,
   clientIpHash,
+  constantTimeEqual,
   createSession,
   getSessionUser,
   hashPassword,
@@ -569,11 +570,104 @@ async function handleGatewayHealth(request, env) {
   }
 }
 
+function isGatewayAuthorized(request, env) {
+  const provided = request.headers.get("authorization") ?? "";
+  return Boolean(env.GATEWAY_SHARED_SECRET) && constantTimeEqual(
+    provided,
+    `Bearer ${env.GATEWAY_SHARED_SECRET}`
+  );
+}
+
+async function handleGatewayPull(request, env) {
+  if (!isGatewayAuthorized(request, env)) return jsonResponse(401, { message: "网关认证失败" });
+
+  const currentTime = now();
+  const command = await env.DB.prepare(
+    `SELECT id, action FROM gateway_commands
+      WHERE status = 'pending' AND expires_at > ?
+      ORDER BY created_at ASC LIMIT 1`
+  )
+    .bind(currentTime)
+    .first();
+  if (!command) return jsonResponse(200, { command: null });
+
+  const claim = await env.DB.prepare(
+    `UPDATE gateway_commands SET status = 'processing', claimed_at = ?
+      WHERE id = ? AND status = 'pending'`
+  )
+    .bind(currentTime, command.id)
+    .run();
+  if (!claim.meta.changes) return jsonResponse(200, { command: null });
+
+  return jsonResponse(200, { command });
+}
+
+async function handleGatewayResult(request, env) {
+  if (!isGatewayAuthorized(request, env)) return jsonResponse(401, { message: "网关认证失败" });
+
+  const { id, success, status, result, code, message } = await readJson(request);
+  if (!id || typeof success !== "boolean") return jsonResponse(400, { message: "网关结果无效" });
+
+  const responseBody = {
+    success,
+    status,
+    result,
+    code,
+    message: String(message ?? (success ? "操作成功" : "开门请求失败")).slice(0, 300)
+  };
+  const update = await env.DB.prepare(
+    `UPDATE gateway_commands
+        SET status = ?, response_json = ?, completed_at = ?
+      WHERE id = ? AND status = 'processing'`
+  )
+    .bind(success ? "succeeded" : "failed", JSON.stringify(responseBody), now(), id)
+    .run();
+
+  if (!update.meta.changes) return jsonResponse(409, { message: "命令不存在或已完成" });
+  return jsonResponse(200, { success: true });
+}
+
+async function enqueueGatewayCommand(env, user) {
+  const id = crypto.randomUUID();
+  const createdAt = now();
+  await env.DB.prepare(
+    `INSERT INTO gateway_commands (id, user_id, action, status, created_at, expires_at)
+     VALUES (?, ?, 'open-door', 'pending', ?, ?)`
+  )
+    .bind(id, user.id, createdAt, createdAt + 30)
+    .run();
+
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const command = await env.DB.prepare(
+      "SELECT status, response_json FROM gateway_commands WHERE id = ?"
+    )
+      .bind(id)
+      .first();
+    if (command?.status === "succeeded" || command?.status === "failed") {
+      return JSON.parse(command.response_json);
+    }
+  }
+
+  await env.DB.prepare(
+    "UPDATE gateway_commands SET status = 'failed', response_json = ?, completed_at = ? WHERE id = ? AND status = 'pending'"
+  )
+    .bind(JSON.stringify({ success: false, message: "门禁网关未领取命令" }), now(), id)
+    .run();
+  return { success: false, message: "门禁网关响应超时" };
+}
+
 async function handleOpenDoor(request, env) {
   const user = await requireActiveUser(env, request);
   if (!user) return jsonResponse(401, { success: false, message: "请先登录" });
   if (request.headers.get("x-door-action") !== "open") {
     return jsonResponse(403, { success: false, message: "请求来源无效" });
+  }
+
+  if (env.GATEWAY_MODE === "pull" && env.GATEWAY_SHARED_SECRET) {
+    const result = await enqueueGatewayCommand(env, user);
+    await writeAudit(env, request, "door.open.gateway_pull", user.id, user.id);
+    return jsonResponse(result.success ? 200 : 502, result);
   }
 
   if (env.GATEWAY_URL || env.GATEWAY_SHARED_SECRET) {
@@ -651,6 +745,9 @@ async function handleApi(request, env) {
   const path = url.pathname;
   const method = request.method;
   const mutation = method !== "GET" && method !== "HEAD";
+
+  if (path === "/api/gateway/pull" && method === "POST") return handleGatewayPull(request, env);
+  if (path === "/api/gateway/result" && method === "POST") return handleGatewayResult(request, env);
 
   if (mutation && !isTrustedMutation(request)) {
     return jsonResponse(403, { message: "请求来源无效" });

@@ -93,13 +93,72 @@ async function openDoor(env) {
   }
 }
 
+async function controlPlaneRequest(env, path, body = {}) {
+  if (!env.CONTROL_PLANE_URL || !env.GATEWAY_SHARED_SECRET) {
+    throw new Error("CONTROL_PLANE_URL 或 GATEWAY_SHARED_SECRET 未配置");
+  }
+  const url = new URL(env.CONTROL_PLANE_URL);
+  const localDevelopment = ["localhost", "127.0.0.1"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(localDevelopment && url.protocol === "http:")) {
+    throw new Error("CONTROL_PLANE_URL 必须使用 HTTPS");
+  }
+  url.pathname = path;
+  url.search = "";
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${env.GATEWAY_SHARED_SECRET}`,
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  const data = await response.json().catch(() => ({ message: "控制端返回了无法识别的内容" }));
+  if (!response.ok) throw new Error(data.message ?? `控制端 HTTP ${response.status}`);
+  return data;
+}
+
+function delay(milliseconds, signal) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, milliseconds);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
+}
+
+export async function runGatewayPoller(env = process.env, signal) {
+  while (!signal?.aborted) {
+    try {
+      const { command } = await controlPlaneRequest(env, "/api/gateway/pull");
+      if (!command) {
+        await delay(750, signal);
+        continue;
+      }
+
+      const outcome = await openDoor(env);
+      await controlPlaneRequest(env, "/api/gateway/result", {
+        id: command.id,
+        ...outcome.body
+      });
+    } catch (error) {
+      console.error(`Gateway poll failed: ${error?.name ?? "Error"}: ${String(error?.message ?? "未知错误").slice(0, 160)}`);
+      await delay(2_000, signal);
+    }
+  }
+}
+
 export function createGatewayServer(env = process.env) {
   return createServer(async (request, response) => {
     try {
       const url = new URL(request.url, `http://${request.headers.host ?? "localhost"}`);
 
       if (request.method === "GET" && url.pathname === "/health") {
-        jsonResponse(response, 200, { status: "ok" });
+        jsonResponse(response, 200, {
+          status: "ok",
+          mode: env.CONTROL_PLANE_URL ? "pull" : "push"
+        });
         return;
       }
 
@@ -148,11 +207,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const host = process.env.HOST ?? "127.0.0.1";
   const port = Number.parseInt(process.env.PORT ?? "8788", 10);
   const server = createGatewayServer();
+  const pollAbortController = new AbortController();
+  if (process.env.CONTROL_PLANE_URL) {
+    void runGatewayPoller(process.env, pollAbortController.signal);
+  }
   server.listen(port, host, () => {
     console.log(`Door gateway listening on http://${host}:${port}`);
   });
 
-  const shutdown = () => server.close(() => process.exit(0));
+  const shutdown = () => {
+    pollAbortController.abort();
+    server.close(() => process.exit(0));
+  };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 }

@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 
 import { ReplayCache, createGatewaySignature, verifyGatewayRequest } from "../gateway/auth.mjs";
-import { createGatewayServer } from "../gateway/server.mjs";
+import { createGatewayServer, runGatewayPoller } from "../gateway/server.mjs";
 import { createGatewayHeaders, resolveGatewayEndpoint } from "../worker/gateway-client.js";
 
 const sharedSecret = "test-shared-secret-with-more-than-32-characters";
@@ -100,4 +100,66 @@ test("gateway verifies a signed command and forwards the door request", async (c
   assert.equal(response.status, 200);
   assert.equal(result.success, true);
   assert.equal(result.message, "ok");
+});
+
+test("gateway poller claims a command and reports the upstream result", async (context) => {
+  const upstream = createServer((request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ status: "1", message: "opened" }));
+  });
+  const upstreamUrl = await listen(upstream);
+  let commandSent = false;
+  let reportedResult;
+  let resolveResult;
+  const resultReceived = new Promise((resolve) => {
+    resolveResult = resolve;
+  });
+  const controlPlane = createServer(async (request, response) => {
+    assert.equal(request.headers.authorization, `Bearer ${sharedSecret}`);
+    let rawBody = "";
+    for await (const chunk of request) rawBody += chunk;
+    const body = JSON.parse(rawBody);
+
+    if (request.url === "/api/gateway/pull") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        command: commandSent ? null : { id: "command-1", action: "open-door" }
+      }));
+      commandSent = true;
+      return;
+    }
+    if (request.url === "/api/gateway/result") {
+      reportedResult = body;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ success: true }));
+      resolveResult();
+    }
+  });
+  const controlPlaneUrl = await listen(controlPlane);
+  const abortController = new AbortController();
+  context.after(async () => {
+    abortController.abort();
+    await close(controlPlane);
+    await close(upstream);
+  });
+  const env = {
+    CONTROL_PLANE_URL: controlPlaneUrl,
+    GATEWAY_SHARED_SECRET: sharedSecret,
+    UPSTREAM_REQUEST_BASE64: Buffer.from(JSON.stringify({
+      url: `${upstreamUrl}/open`,
+      token: "upstream-token",
+      body: { door: "front" }
+    })).toString("base64")
+  };
+
+  void runGatewayPoller(env, abortController.signal);
+  await resultReceived;
+  abortController.abort();
+
+  assert.deepEqual(reportedResult, {
+    id: "command-1",
+    success: true,
+    status: "1",
+    message: "opened"
+  });
 });

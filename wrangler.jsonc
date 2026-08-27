@@ -5,7 +5,7 @@
   "compatibility_date": "2026-08-27",
   "vars": {
     "RP_NAME": "智能门禁",
-    "ALLOW_INSECURE_GATEWAY": "true"
+    "GATEWAY_MODE": "pull"
   },
   "d1_databases": [
     {
